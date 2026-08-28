@@ -659,7 +659,19 @@ verbose_msg MSG
 debug_msg MSG
 ```
 
-and `qpkg.cfg` values can be edited in-place with:
+A log file that may hold sensitive output can be restricted to its owner (mode `600`, so only the
+owner and `root` can read it) with:
+
+```sh
+secure_log_file FILE    # creates FILE with mode 600, or chmod 600 if it already exists
+```
+
+`FILE` is never truncated, so existing content is kept. Call it *before* the command that writes the
+log, so that the log is already restricted when the first line is appended. `qbuild` uses this for its
+own `code_signing.log` and `qnap_hsm.log`. Note that a `chmod` failure — for example a log left in a
+shared build directory by another user — goes through `warn_msg`, and so is fatal under `QDK_STRICT`.
+
+Finally, `qpkg.cfg` values can be edited in-place with:
 
 ```sh
 edit_qpkg_config FIELD VALUE [path-to-qpkg.cfg]

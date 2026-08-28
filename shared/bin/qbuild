@@ -29,6 +29,10 @@
 ##### System definitions #####
 PREFIX="App Center"
 DEFAULT_ULINUX_CONF="/etc/default_config/uLinux.conf"
+# Logs of the code signing operations. They may contain sensitive
+# information, so they are only readable by their owner (and root).
+CODE_SIGNING_LOG="code_signing.log"
+QNAP_HSM_LOG="qnap_hsm.log"
 
 ##### Command definitions #####
 CMD_AWK="${CMD_AWK:-$(command -v awk)}"
@@ -349,6 +353,21 @@ debug_msg(){
 	msg "$1" $DEBUG
 }
 
+# Make sure the given log file can only be read by its owner (and root),
+# creating it with those permissions if it does not exist yet. The file is
+# never truncated so that existing logs are kept.
+secure_log_file(){
+	local log_file="$1"
+	[ -n "$log_file" ] || return 0
+	if [ -e "$log_file" ] || [ -L "$log_file" ]; then
+		/bin/chmod 600 "$log_file" 2>/dev/null || \
+			warn_msg "$log_file: failed to restrict access to log file"
+	else
+		( umask 077 && : > "$log_file" ) 2>/dev/null || \
+			warn_msg "$log_file: failed to create log file"
+	fi
+}
+
 # Return 0 if given directory is empty, otherwise return 1
 is_empty_dir(){
 	if [ -d "$1" ]; then
@@ -540,12 +559,13 @@ do_anti_tampering(){
 		QNAP_CODE_SIGNING_SERVER_IP="codesigning.qnap.com.tw"
 		QNAP_CODE_SIGNING_SERVER_PORT="5001"
 	fi
+	secure_log_file "$CODE_SIGNING_LOG"
 	$CS_PYTHON "${QDK_SCRIPTS_DIR}/codesigning_qpkg.py" \
 		cwd="`pwd`" buildpath=$build_dir \
 		csv="${QNAP_CODE_SIGNING_CSV}" \
 		server=${QNAP_CODE_SIGNING_SERVER_IP}:${QNAP_CODE_SIGNING_SERVER_PORT} \
 		key_ver=${QNAP_CODE_SIGNING_KEY_VERSION} \
-		2>&1 | tee -a code_signing.log
+		2>&1 | tee -a "$CODE_SIGNING_LOG"
 	if [ ${PIPESTATUS[0]} != 0 ]; then
 		err_msg "$QPKG_NAME: Failed to add anti-tamper support"
 	fi
@@ -971,12 +991,13 @@ add_qpkg_signature(){
 			QNAP_CODE_SIGNING_SERVER_PORT="5001"
 		fi
 		openssl dgst -sha1 -binary "${QDK_QPKG_FILE}" > "${QDK_QPKG_FILE}.sha"
+		secure_log_file "$CODE_SIGNING_LOG"
 		$CS_PYTHON "${QDK_SCRIPTS_DIR}/codesigning_qpkg_cms.py" \
 			cwd="`pwd`" \
 			server=${QNAP_CODE_SIGNING_SERVER_IP}:${QNAP_CODE_SIGNING_SERVER_PORT} \
 			in="${QDK_QPKG_FILE}.sha" out="${QDK_QPKG_FILE}.msg" \
 			key_ver=${QNAP_CODE_SIGNING_KEY_VERSION} \
-			2>&1 | tee -a code_signing.log
+			2>&1 | tee -a "$CODE_SIGNING_LOG"
 		/bin/rm ${QDK_QPKG_FILE}.sha
 		if [ -f "${QDK_QPKG_FILE}.msg" ]; then
 			add_qdk_area_begin
@@ -1728,12 +1749,13 @@ add_code_signing(){
 	if [ "x${QNAP_CODE_SIGNING}" = "x1" ]; then
 		# Send qpkg digest to server
 		verbose_msg "Connecting to code signing server to create digital signature..."
+		secure_log_file "$CODE_SIGNING_LOG"
 		$CS_PYTHON "${QDK_SCRIPTS_DIR}/codesigning_qpkg_cms.py" \
 			server=${QNAP_CODE_SIGNING_SERVER_IP}:${QNAP_CODE_SIGNING_SERVER_PORT} \
 			qpkgname=${QPKG_NAME} version=${QPKG_VER} \
 			in="${qpkg}.sha" out="${qpkg}.msg" \
 			key_ver=${QNAP_CODE_SIGNING_KEY_VERSION} \
-			2>&1 | tee -a code_signing.log
+			2>&1 | tee -a "$CODE_SIGNING_LOG"
 	else
 		# 3rd party, not connected to server, sign using local certificate and private key
 		if [ "$DO_CODE_SIGNING_OFFLINE_HSM" = "TRUE" ]; then
@@ -1748,13 +1770,14 @@ add_code_signing(){
 			else
 				err_msg "Need to set at least HSM_KEY_ID or HSM_KEY_LABEL environment variable while using HSM"
 			fi
+			secure_log_file "$QNAP_HSM_LOG"
 			if [ "x${CA_CERTS_HSM}" != "x" ] && [ -f "${CA_CERTS_HSM}" ]; then
 				openssl cms -engine pkcs11 -keyform engine -sign -in "${qpkg}.sha" -binary -nodetach -out "${qpkg}.msg" \
 					-signer "${QNAP_CERT_HSM}" -inkey "${INKEY}" \
-					-certfile "${CA_CERTS_HSM}" 2>>"qnap_hsm.log"
+					-certfile "${CA_CERTS_HSM}" 2>>"$QNAP_HSM_LOG"
 			else
 				openssl cms -engine pkcs11 -keyform engine -sign -in "${qpkg}.sha" -binary -nodetach -out "${qpkg}.msg" \
-					-signer "${QNAP_CERT_HSM}" -inkey "${INKEY}" 2>>"qnap_hsm.log"
+					-signer "${QNAP_CERT_HSM}" -inkey "${INKEY}" 2>>"$QNAP_HSM_LOG"
 			fi
 		else
 			verbose_msg "Creating code signing digital signature..."

@@ -7,6 +7,7 @@ import json
 import tempfile
 import subprocess
 import csv
+import time
 
 TOOL = "openssl"
 
@@ -137,6 +138,11 @@ def data_to_string(data):
     return ret
 
 def read_csv(csv_file):
+    # The anti-tampering project has been discontinued, so no files are
+    # collected and no bandwidth is spent on the code signing server.
+    # This early return is intentional, not leftover debug code; the parsing
+    # below is kept in case the feature is ever resumed.
+    return []
     try:
         with open(csv_file, 'r') as f:
             reader = csv.reader(f)
@@ -294,7 +300,7 @@ def sign_cms(kwargs):
                 "-k",
                 "--connect-timeout", "60",
                 "--max-time", "600",
-                "--retry", "3",
+                "--retry", "5",
                 "-X", "POST",
                 "-F", "token=%s" % kwargs["token"],
                 "-F", "file=@%s" % file_name]
@@ -303,11 +309,18 @@ def sign_cms(kwargs):
     command.append("https://%s" % url)
     logging.info(command)
     try:
-        sp = subprocess.Popen(command,stdout=subprocess.PIPE,stderr=subprocess.PIPE)
-        out,err = sp.communicate()
-        if sp.returncode != 0:
+        max_retry = 10
+        for i in range(max_retry):
+            sp = subprocess.Popen(command,stdout=subprocess.PIPE,stderr=subprocess.PIPE)
+            out,err = sp.communicate()
+            if sp.returncode == 0:
+                break
+            # curl command returned none-zero code
             logging.error("curl error %s" % err)
-            sys.exit(CONNECT_ERROR)
+            if i == max_retry - 1: # failed when last attempt, exit
+                sys.exit(CONNECT_ERROR)
+            time.sleep(30)
+
         try:
             out = out.decode()
         except (UnicodeDecodeError, AttributeError):
