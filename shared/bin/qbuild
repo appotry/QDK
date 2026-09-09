@@ -368,12 +368,25 @@ debug_msg(){
 secure_log_file(){
 	local log_file="$1"
 	[ -n "$log_file" ] || return 0
-	if [ -e "$log_file" ] || [ -L "$log_file" ]; then
+	# A symlink is never acceptable here. chmod follows it, and fails outright
+	# when the target does not exist yet, after which the command writing the
+	# log would create the target with the ambient umask instead of 600.
+	if [ -L "$log_file" ]; then
+		err_msg "$log_file: log file is a symbolic link, refusing to write to it"
+	fi
+	if [ -e "$log_file" ]; then
+		# Anything but a regular file (a fifo, for example) is not ours to
+		# secure either.
+		[ -f "$log_file" ] || \
+			err_msg "$log_file: log file is not a regular file, refusing to write to it"
+		# The log may hold sensitive output, so failing to restrict it is
+		# fatal, not a warning: a chmod failure means the file belongs to
+		# somebody else, who would then be able to read the log.
 		/bin/chmod 600 "$log_file" 2>/dev/null || \
-			warn_msg "$log_file: failed to restrict access to log file"
+			err_msg "$log_file: failed to restrict access to log file"
 	else
 		( umask 077 && : > "$log_file" ) 2>/dev/null || \
-			warn_msg "$log_file: failed to create log file"
+			err_msg "$log_file: failed to create log file"
 	fi
 }
 
