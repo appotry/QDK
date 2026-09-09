@@ -37,9 +37,18 @@ QNAP_HSM_LOG="qnap_hsm.log"
 ##### Command definitions #####
 CMD_AWK="${CMD_AWK:-$(command -v awk)}"
 CMD_CMP="${CMD_CMP:-$(command -v cmp)}"
-CS_PYTHON="${CS_PYTHON:-$(command -v python2)}"
+# For code signing scripts, use python3 when it is available
+# fall back to python2 otherwise.
+CS_PYTHON="${CS_PYTHON:-$(command -v python3)}"
 if [ ! -e "$CS_PYTHON" ]; then
-CS_PYTHON="/usr/local/bin/python2"
+CS_PYTHON="$(command -v python2)"
+fi
+if [ ! -e "$CS_PYTHON" ]; then
+	if [ -e "/usr/local/bin/python3" ]; then
+		CS_PYTHON="/usr/local/bin/python3"
+	else
+		CS_PYTHON="/usr/local/bin/python2"
+	fi
 fi
 
 if [ -f "$DEFAULT_ULINUX_CONF" ]; then
@@ -1827,15 +1836,26 @@ add_code_signing(){
 }
 
 get_server_err(){
-	echo $1 | ${CS_PYTHON} -c 'import json,sys;obj=json.load(sys.stdin);print obj["error"]'
+	echo $1 | ${CS_PYTHON} -c 'import json,sys;obj=json.load(sys.stdin);print(obj["error"])'
 }
 
 get_server_msg(){
-	echo $1 | ${CS_PYTHON} -c 'import json,sys;obj=json.load(sys.stdin);print obj["msg"]'
+	echo $1 | ${CS_PYTHON} -c 'import json,sys;obj=json.load(sys.stdin);print(obj["msg"])'
 }
 
 write_server_cert_to_file(){
-	echo $1 | ${CS_PYTHON} -c 'import json,sys;obj=json.load(sys.stdin);print obj["certificate"]["pem"]' > $2
+	echo $1 | ${CS_PYTHON} -c 'import json,sys;obj=json.load(sys.stdin);print(obj["certificate"]["pem"])' > $2
+}
+
+# Query the code signing server.
+# $1: URL, $2: extra request data appended to the token (optional)
+# The request body is fed to curl on stdin ("-d @-") so that the code signing
+# token never becomes visible in /proc/<pid>/cmdline. printf is a bash builtin,
+# so it does not expose the token either.
+query_code_signing_server(){
+	local data="token=${QNAP_CODESIGNING_TOKEN}"
+	[ -n "$2" ] && data="${data}&$2"
+	printf '%s' "$data" | curl -k -X GET -d @- "$1" 2>/dev/null
 }
 
 # Verify code signing digital signature in a QPKG
@@ -1848,17 +1868,15 @@ verify_code_signing_online(){
 		QNAP_CODE_SIGNING_SERVER_PORT="5001"
 	fi
 
-	local curl_cmd=
 	local output=
 	local server_err=
 	local server_msg=
+	local cs_url="https://${QNAP_CODE_SIGNING_SERVER_IP}:${QNAP_CODE_SIGNING_SERVER_PORT}"
 
 	# Get ca cert
 	local ca_cert_file="${qpkg}.ca"
-	curl_cmd="curl -k -X GET -d 'token=${QNAP_CODESIGNING_TOKEN}' \
-		https://${QNAP_CODE_SIGNING_SERVER_IP}:${QNAP_CODE_SIGNING_SERVER_PORT}/keys/qnaproot \
-		2>/dev/null"
-	output="$(eval $curl_cmd)" || err_msg "failed to connect to code signing server"
+	output="$(query_code_signing_server "${cs_url}/keys/qnaproot")" \
+		|| err_msg "failed to connect to code signing server"
 	server_err=$(get_server_err "$output")
 	if [ $server_err -ne 0 ]; then
 		server_msg=$(get_server_msg "$output")
@@ -1868,10 +1886,8 @@ verify_code_signing_online(){
 
 	# Get ca cert v2
 	local ca_cert_2_file="${qpkg}.ca_2"
-	curl_cmd="curl -k -X GET -d 'token=${QNAP_CODESIGNING_TOKEN}' \
-		https://${QNAP_CODE_SIGNING_SERVER_IP}:${QNAP_CODE_SIGNING_SERVER_PORT}/keys/qnaproot/v2 \
-		2>/dev/null"
-	output="$(eval $curl_cmd)" || err_msg "failed to connect to code signing server"
+	output="$(query_code_signing_server "${cs_url}/keys/qnaproot/v2")" \
+		|| err_msg "failed to connect to code signing server"
 	server_err=$(get_server_err "$output")
 	if [ $server_err -ne 0 ]; then
 		server_msg=$(get_server_msg "$output")
@@ -1881,10 +1897,8 @@ verify_code_signing_online(){
 
 	# Get ca cert (3rd party)
 	local ca_cert3_file="${qpkg}.ca3"
-	curl_cmd="curl -k -X GET -d 'token=${QNAP_CODESIGNING_TOKEN}&third_party=true' \
-		https://${QNAP_CODE_SIGNING_SERVER_IP}:${QNAP_CODE_SIGNING_SERVER_PORT}/keys/qnaproot \
-		2>/dev/null"
-	output="$(eval $curl_cmd)" || err_msg "failed to connect to code signing server"
+	output="$(query_code_signing_server "${cs_url}/keys/qnaproot" "third_party=true")" \
+		|| err_msg "failed to connect to code signing server"
 	server_err=$(get_server_err "$output")
 	if [ $server_err -ne 0 ]; then
 		server_msg=$(get_server_msg "$output")
@@ -1894,10 +1908,8 @@ verify_code_signing_online(){
 
 	# Get ca cert (3rd party v2)
 	local ca_cert3_2_file="${qpkg}.ca3_2"
-	curl_cmd="curl -k -X GET -d 'token=${QNAP_CODESIGNING_TOKEN}&third_party=true' \
-                https://${QNAP_CODE_SIGNING_SERVER_IP}:${QNAP_CODE_SIGNING_SERVER_PORT}/keys/qnaproot/v2 \
-                2>/dev/null"
-	output="$(eval $curl_cmd)" || err_msg "failed to connect to code signing server"
+	output="$(query_code_signing_server "${cs_url}/keys/qnaproot/v2" "third_party=true")" \
+		|| err_msg "failed to connect to code signing server"
 	server_err=$(get_server_err "$output")
 	if [ $server_err -ne 0 ]; then
                 server_msg=$(get_server_msg "$output")
@@ -1907,10 +1919,8 @@ verify_code_signing_online(){
 
 	# Get ca cert (3rd party v3)
 	local ca_cert3_3_file="${qpkg}.ca3_3"
-	curl_cmd="curl -k -X GET -d 'token=${QNAP_CODESIGNING_TOKEN}&third_party=true' \
-                https://${QNAP_CODE_SIGNING_SERVER_IP}:${QNAP_CODE_SIGNING_SERVER_PORT}/keys/qnaproot/v3 \
-                2>/dev/null"
-	output="$(eval $curl_cmd)" || err_msg "failed to connect to code signing server"
+	output="$(query_code_signing_server "${cs_url}/keys/qnaproot/v3" "third_party=true")" \
+		|| err_msg "failed to connect to code signing server"
 	server_err=$(get_server_err "$output")
 	if [ $server_err -ne 0 ]; then
                 server_msg=$(get_server_msg "$output")
