@@ -15,6 +15,7 @@ case "$1" in
 		echo "Compiler QPKG encrypt"
 		cd src
 		make
+		cp bin/qpkg_encrypt /bin
 		cd ../
 		echo "Install QDK"
 		cp -rf ./shared /usr/share/QDK
@@ -27,6 +28,7 @@ case "$1" in
 	;;
 	remove)
 		echo "Remove QDK"
+		rm -rf "/bin/qpkg_encrypt"
 		rm -rf "/etc/config/qdk.conf"
 		rm -rf "/usr/share/QDK"
 		sed -i '/QDK/d' ~/.bashrc

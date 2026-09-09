@@ -5,7 +5,7 @@
 #
 # A QPKG installation script for QDK
 #
-# QDK V.2.3.14
+# QDK V2.5.3
 #
 # Copyright (C) 2009,2010 QNAP Systems, Inc.
 # Copyright (C) 2010,2011 Michael Nordstrom
@@ -79,6 +79,7 @@ SYS_QPKG_DATA_BUILTVER_FILE="./built_version"
 SYS_QPKG_DATA_BUILTINFO_FILE="./built_info"
 SYS_QPKG_DATA_PACKAGES_FILE="./Packages.gz"
 SYS_QPKG_CONFIG_FILE="$SYS_CONFIG_DIR/qpkg.conf"
+SYS_DEFAULT_ULINUX_CONF="/etc/default_config/uLinux.conf"
 SYS_QPKG_CONF_FIELD_QPKGFILE="QPKG_File"
 SYS_QPKG_CONF_FIELD_NAME="Name"
 SYS_QPKG_CONF_FIELD_DISPLAY_NAME="Display_Name"
@@ -106,6 +107,7 @@ SYS_QPKG_CONF_FIELD_PROXY_PATH="Proxy_Path"
 SYS_QPKG_CONF_FIELD_TIMEOUT="Timeout"
 SYS_QPKG_CONF_FIELD_VISIBLE="Visible"
 SYS_QPKG_CONF_FIELD_FORCE_VISIBLE="Force_Visible"
+SYS_QPKG_CONF_FIELD_DISTRIBUTION_TYPE="Distribution_Type"
 SYS_QPKG_CONF_FIELD_CONTAINER="Container"
 SYS_QPKG_CONF_FIELD_EXEC_FILES="Exec_Files"
 SYS_QPKG_CONF_FIELD_FW_VER_MIN="FW_Ver_Min"
@@ -511,19 +513,9 @@ remove_file_and_empty_dir(){
 # Check QTS minimum version.
 #############################
 check_qts_version(){
-	NOW_VERSION=`/sbin/getcfg System Version -f /etc/config/uLinux.conf|cut -c 1,3,5`
-	if [ -e $QTS_MINI_VERSION ]; then
-		MINI_VERSION=0
-	else
-		MINI_VERSION=`echo "$QTS_MINI_VERSION"|cut -c 1,3,5`
-	fi
-	if [ -e $QTS_MAX_VERSION ]; then
-		MAX_VERSION=1000
-	else
-		MAX_VERSION=`echo "$QTS_MAX_VERSION"|cut -c 1,3,5`
-	fi
+	local now_version=`/sbin/getcfg System Version -f "$SYS_DEFAULT_ULINUX_CONF"`
 
-	if [ ${MINI_VERSION} -gt ${NOW_VERSION} ]; then
+	if [ -n "$QTS_MINI_VERSION" ] && is_less "$now_version" "$QTS_MINI_VERSION"; then
 		if [ -x "/usr/local/sbin/notify" ]; then
 			/usr/local/sbin/notify send -A A039 -C C001 -M 40 -l error -t 3 "[{0}] {1} install failed due to the QTS firmware is not compatible, please upgrade QTS to {2} or newer version." "$PREFIX" "$QPKG_DISPLAY_NAME" "$QTS_MINI_VERSION"
 			set_progress_fail
@@ -531,7 +523,7 @@ check_qts_version(){
 		else
 			err_log "[$PREFIX] Failed to install $QPKG_DISPLAY_NAME. Upgrade QTS to $QTS_MINI_VERSION or a newer compatible version."
 		fi
-	elif [ ${MAX_VERSION} -lt ${NOW_VERSION} ]; then
+	elif [ -n "$QTS_MAX_VERSION" ] && is_greater "$now_version" "$QTS_MAX_VERSION"; then
 		if [ -x "/usr/local/sbin/notify" ]; then
 			/usr/local/sbin/notify send -A A039 -C C001 -M 41 -l error -t 3 "[{0}] {1} install failed due to the QTS firmware is not compatible, please downgrade QTS to {2} or newer version." "$PREFIX" "$QPKG_DISPLAY_NAME" "$QTS_MAX_VERSION"
 			set_progress_fail
@@ -822,6 +814,9 @@ set_qpkg_force_visible(){
 		set_qpkg_field $SYS_QPKG_CONF_FIELD_FORCE_VISIBLE "$QPKG_FORCE_VISIBLE"
 	fi
 }
+set_qpkg_distribution_type(){
+	set_qpkg_field $SYS_QPKG_CONF_FIELD_DISTRIBUTION_TYPE "${QPKG_DISTRIBUTION_TYPE:-0}"
+}
 set_qpkg_fw_ver_min(){
 	if [ -n "$QTS_MINI_VERSION" ]; then
 		set_qpkg_field $SYS_QPKG_CONF_FIELD_FW_VER_MIN "$QTS_MINI_VERSION"
@@ -960,6 +955,7 @@ register_qpkg(){
 	set_qpkg_timeout
 	set_qpkg_visible
 	set_qpkg_force_visible
+	set_qpkg_distribution_type
 	set_qpkg_container
 	set_qpkg_exec_file
 	set_qpkg_fw_ver_min

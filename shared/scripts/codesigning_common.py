@@ -7,6 +7,7 @@ import json
 import tempfile
 import subprocess
 import csv
+import time
 
 TOOL = "openssl"
 
@@ -137,6 +138,11 @@ def data_to_string(data):
     return ret
 
 def read_csv(csv_file):
+    # The anti-tampering project has been discontinued, so no files are
+    # collected and no bandwidth is spent on the code signing server.
+    # This early return is intentional, not leftover debug code; the parsing
+    # below is kept in case the feature is ever resumed.
+    return []
     try:
         with open(csv_file, 'r') as f:
             reader = csv.reader(f)
@@ -240,6 +246,22 @@ def create_tgz(temp_folder, output_tgz_file):
         sys.exit(1)
     shutil.rmtree(temp_folder)
 
+def run_curl(command, token):
+    # Run curl with the token piped in on stdin and read back by the
+    # "-F token=<-" form option, so that the token never becomes visible
+    # in /proc/<pid>/cmdline
+    # The token is a plain ascii string, no escaping needed.
+    # stdin needs bytes: str is already bytes on python 2, but has to be
+    # encoded on python 3
+    if not isinstance(token, bytes):
+        token = token.encode("ascii")
+    sp = subprocess.Popen(command,
+                          stdin=subprocess.PIPE,
+                          stdout=subprocess.PIPE,
+                          stderr=subprocess.PIPE)
+    out,err = sp.communicate(token)
+    return sp.returncode, out, err
+
 def sign_files(kwargs):
     # Upload tgz to code signing server, and return response from server
     server = kwargs["server"]
@@ -256,16 +278,15 @@ def sign_files(kwargs):
                 "--max-time", "600",
                 "--retry", "3",
                 "-X", "POST",
-                "-F", "token=%s" % kwargs["token"],
+                "-F", "token=<-",
                 "-F", "file=@%s" % tgz_file_name]
     if "key_ver" in kwargs:
         command = command + ["-F","key_ver=%s" % kwargs["key_ver"]]
     command.append("https://%s" % url)
     logging.info(command)
     try:
-        sp = subprocess.Popen(command,stdout=subprocess.PIPE,stderr=subprocess.PIPE)
-        out,err = sp.communicate()
-        if sp.returncode != 0:
+        returncode,out,err = run_curl(command, kwargs["token"])
+        if returncode != 0:
             logging.error("curl error %s" % err)
             sys.exit(CONNECT_ERROR)
         try:
@@ -294,20 +315,26 @@ def sign_cms(kwargs):
                 "-k",
                 "--connect-timeout", "60",
                 "--max-time", "600",
-                "--retry", "3",
+                "--retry", "5",
                 "-X", "POST",
-                "-F", "token=%s" % kwargs["token"],
+                "-F", "token=<-",
                 "-F", "file=@%s" % file_name]
     if "key_ver" in kwargs:
         command = command + ["-F","key_ver=%s" % kwargs["key_ver"]]
     command.append("https://%s" % url)
     logging.info(command)
     try:
-        sp = subprocess.Popen(command,stdout=subprocess.PIPE,stderr=subprocess.PIPE)
-        out,err = sp.communicate()
-        if sp.returncode != 0:
+        max_retry = 10
+        for i in range(max_retry):
+            returncode,out,err = run_curl(command, kwargs["token"])
+            if returncode == 0:
+                break
+            # curl command returned none-zero code
             logging.error("curl error %s" % err)
-            sys.exit(CONNECT_ERROR)
+            if i == max_retry - 1: # failed when last attempt, exit
+                sys.exit(CONNECT_ERROR)
+            time.sleep(30)
+
         try:
             out = out.decode()
         except (UnicodeDecodeError, AttributeError):
